@@ -15,6 +15,25 @@ namespace Multiplayer
     {
         public PlayerState state { get; set; }
     }
+    public class PlayerSendUpdatePacket
+    {
+        public Vector2 position { get; set; }
+    }
+
+    public class PlayerReceiveUpdatePacket
+    {
+        public PlayerState[] states { get; set; }
+    }
+
+    public class PlayerJoinedGamePacket
+    {
+        public ClientPlayer player { get; set; }
+    }
+
+    public class PlayerLeftGamePacket
+    {
+        public uint pid { get; set; }
+    }
 
     public struct PlayerState : INetSerializable
     {
@@ -34,10 +53,22 @@ namespace Multiplayer
         }
     }
 
-    public class ClientPlayer
+    public struct ClientPlayer : INetSerializable //A struct so we can transfer this over the network
     {
         public PlayerState state;
         public string username;
+
+        public void Deserialize(NetDataReader reader)
+        {
+            state.Deserialize(reader);
+            username = reader.GetString();
+        }
+
+        public void Serialize(NetDataWriter writer)
+        {
+            state.Serialize(writer);
+            writer.Put(username);
+        }
     }
 
     public class ServerPlayer

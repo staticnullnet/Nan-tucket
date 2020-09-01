@@ -5,6 +5,7 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using System.Net;
 using System.Net.Sockets;
+using System.Linq;
 
 namespace Multiplayer
 {
@@ -37,9 +38,11 @@ namespace Multiplayer
 
             // Will reuse the same packet class instance instead of creating new ones, so make sure to not store references to it or its contents! 
             packetProcessor.SubscribeReusable<JoinPacket, NetPeer>(OnJoinReceived);
-
+            packetProcessor.SubscribeReusable<PlayerSendUpdatePacket, NetPeer>(OnPlayerUpdate);
+                       
             // Registering the custom INetSerializable struct in the packet processor
             packetProcessor.RegisterNestedType<PlayerState>();
+            packetProcessor.RegisterNestedType<ClientPlayer>();
 
 
             server = new NetManager(this)
@@ -57,8 +60,18 @@ namespace Multiplayer
         // Update is called once per frame
         void Update()
         {
-            server.PollEvents();
+            if (server != null)
+                server.PollEvents();
+            else
+                Debug.Log("No server started");
+
+            PlayerState[] states = players.Values.Select(p => p.state).ToArray();
+            foreach (ServerPlayer player in players.Values)
+            {
+                SendPacket(new PlayerReceiveUpdatePacket { states = states }, player.peer, DeliveryMethod.Unreliable);
+            }
         }
+
         public void SendPacket<T>(T packet, NetPeer peer, DeliveryMethod deliveryMethod) where T : class, new()
         {
             if (peer != null)
@@ -92,6 +105,54 @@ namespace Multiplayer
 
             // DeliveryMethod ReliableOrdered is reliable, but Unreliable is faster, where a dropped packet or two won't matter too much.
             SendPacket(new JoinAcceptPacket { state = newPlayer.state }, peer, DeliveryMethod.ReliableOrdered);
+
+
+            foreach (ServerPlayer player in players.Values)
+            {
+                if (player.state.pid != newPlayer.state.pid)
+                {
+                    SendPacket(new PlayerJoinedGamePacket
+                    {
+                        player = new ClientPlayer
+                        {
+                            username = newPlayer.username,
+                            state = newPlayer.state,
+                        },
+                    }, player.peer, DeliveryMethod.ReliableOrdered);
+
+                    SendPacket(new PlayerJoinedGamePacket
+                    {
+                        player = new ClientPlayer
+                        {
+                            username = player.username,
+                            state = player.state,
+                        },
+                    }, newPlayer.peer, DeliveryMethod.ReliableOrdered);
+                }
+            }
+        }
+        public void OnPlayerUpdate(PlayerSendUpdatePacket packet, NetPeer peer)
+        {
+            players[(uint)peer.Id].state.position = packet.position;
+        }
+        public void OnPeerDisconnected(NetPeer peer, DisconnectInfo disconnectInfo)
+        {
+            Debug.Log($"Player (pid: {(uint)peer.Id}) left the game");
+            if (peer.Tag != null)
+            {
+                ServerPlayer playerLeft;
+                if (players.TryGetValue(((uint)peer.Id), out playerLeft))
+                {
+                    foreach (ServerPlayer player in players.Values)
+                    {
+                        if (player.state.pid != playerLeft.state.pid)
+                        {
+                            SendPacket(new PlayerLeftGamePacket { pid = playerLeft.state.pid }, player.peer, DeliveryMethod.ReliableOrdered);
+                        }
+                    }
+                    players.Remove((uint)peer.Id);
+                }
+            }
         }
 
         void INetEventListener.OnNetworkError(IPEndPoint endPoint, SocketError socketError)
